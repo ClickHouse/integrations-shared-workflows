@@ -1,0 +1,79 @@
+name: Relay Issue for Cross-Repo Investigation
+
+# Called from language client repos to copy issues to the central repo.
+#
+# Usage in a client repo (e.g. clickhouse-cs/.github/workflows/cross-repo-bug-relay.yml):
+#
+#   name: Relay bugs for cross-repo investigation
+#   on:
+#     issues:
+#       types: [opened]
+#   jobs:
+#     relay:
+#       uses: ClickHouse/integrations-ai-playground/.github/workflows/cross-repo-bug-relay.yml@main
+#       secrets: inherit
+
+on:
+  workflow_call:
+    secrets:
+      WORKFLOW_AUTH_PUBLIC_APP_ID:
+        required: true
+      WORKFLOW_AUTH_PUBLIC_PRIVATE_KEY:
+        required: true
+
+permissions: {}
+
+jobs:
+  relay:
+    name: Relay issue to central repo
+    runs-on: ubuntu-latest
+    if: >-
+      !github.event.issue.pull_request &&
+      !endsWith(github.event.sender.login, '[bot]')
+
+    steps:
+      - name: Generate token for central repo
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.WORKFLOW_AUTH_PUBLIC_APP_ID }}
+          private-key: ${{ secrets.WORKFLOW_AUTH_PUBLIC_PRIVATE_KEY }}
+          repositories: integrations-ai-playground
+
+      - name: Relay issue
+        run: |
+          # Build the relay issue body with machine-readable metadata
+          BODY=$(cat <<'RELAY_EOF'
+          <!-- relay-metadata
+          source_repo: PLACEHOLDER_REPO
+          source_issue: PLACEHOLDER_NUMBER
+          source_url: PLACEHOLDER_URL
+          -->
+
+          _Relayed from PLACEHOLDER_REPO#PLACEHOLDER_NUMBER_
+
+          ---
+
+          RELAY_EOF
+          )
+          BODY="${BODY//PLACEHOLDER_REPO/$SOURCE_REPO}"
+          BODY="${BODY//PLACEHOLDER_NUMBER/$SOURCE_NUMBER}"
+          BODY="${BODY//PLACEHOLDER_URL/$SOURCE_URL}"
+          BODY="${BODY}
+
+          ${ISSUE_BODY}"
+
+          # Create issue in central repo
+          gh issue create \
+            --repo ClickHouse/integrations-ai-playground \
+            --title "[$REPO_SHORT_NAME] ${ISSUE_TITLE}" \
+            --label relayed \
+            --body "$BODY"
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SOURCE_REPO: ${{ github.repository }}
+          SOURCE_NUMBER: ${{ github.event.issue.number }}
+          SOURCE_URL: ${{ github.event.issue.html_url }}
+          REPO_SHORT_NAME: ${{ github.event.repository.name }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
