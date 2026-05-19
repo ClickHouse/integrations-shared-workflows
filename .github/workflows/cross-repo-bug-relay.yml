@@ -1,14 +1,16 @@
-name: Relay Issue for Cross-Repo Investigation
+name: Relay Issue or PR for Cross-Repo Investigation
 
 # Called from source repos (language clients, connectors, …) to copy issues
-# to a central cross-repo-investigation repo.
+# and/or pull requests to a central cross-repo-investigation repo.
 #
-# Usage in a source repo (e.g. clickhouse-cs/.github/workflows/cross-repo-bug-relay.yml):
+# Usage in a source repo:
 #
-#   name: Relay bugs for cross-repo investigation
+#   name: Relay bugs / fixes for cross-repo investigation
 #   on:
 #     issues:
 #       types: [opened]
+#     pull_request:
+#       types: [opened]   # optional — only if you want PR relay too
 #   jobs:
 #     relay:
 #       uses: ClickHouse/integrations-shared-workflows/.github/workflows/cross-repo-bug-relay.yml@main
@@ -17,6 +19,18 @@ name: Relay Issue for Cross-Repo Investigation
 #       # with:
 #       #   central_repo: ClickHouse/connectors-cross-repo-bug-checks
 #       secrets: inherit
+#
+# Issues are relayed with label `relayed`; pull requests with `relayed-pr`.
+# The central repo's triage + investigate pipelines decide what each label
+# means downstream (issues are typically "bug, investigate cross-repo"; PRs
+# are typically "fix in source repo, check whether the same fix is needed
+# in sibling repos" — which is a separate prompt, not handled here).
+#
+# Fork PRs: `pull_request` events from forks don't receive secrets, so
+# external-contributor PRs won't be relayed. That's intentional — relaying
+# arbitrary fork PRs into a central repo isn't desirable. Switch the caller
+# side to `pull_request_target` if you need fork PR relay; that's a known
+# security footgun, so think it through first.
 
 on:
   workflow_call:
@@ -24,8 +38,8 @@ on:
       central_repo:
         description: >-
           Full `owner/name` of the cross-repo-investigation central repo to
-          relay issues into. Defaults to the original language-client
-          pipeline so existing callers keep working unchanged.
+          relay into. Defaults to the original language-client pipeline so
+          existing callers keep working unchanged.
         required: false
         type: string
         default: ClickHouse/integrations-ai-playground
@@ -39,10 +53,13 @@ permissions: {}
 
 jobs:
   relay:
-    name: Relay issue to central repo
+    name: Relay to central repo
     runs-on: ubuntu-latest
+    # Only handle issues and PRs (defensive — caller might register more
+    # event types in the future). Skip bot-authored items so dependabot /
+    # renovate PRs and auto-filed issues don't get fanned out.
     if: >-
-      !github.event.issue.pull_request &&
+      (github.event_name == 'issues' || github.event_name == 'pull_request') &&
       !endsWith(github.event.sender.login, '[bot]')
 
     steps:
@@ -66,6 +83,31 @@ jobs:
         env:
           CENTRAL_REPO: ${{ inputs.central_repo }}
 
+      - name: Resolve relay kind
+        id: payload
+        # Issue and PR events use different payload paths and want
+        # different central-repo labels + title prefixes. Compute those
+        # once here; the actual number/url/title/body fields are pulled
+        # via `${{ github.event.issue.* || github.event.pull_request.* }}`
+        # expressions in the relay step's env.
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "issues" ]; then
+            {
+              echo "kind=issue"
+              echo "label=relayed"
+              echo "title_tag="
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "kind=pr"
+              echo "label=relayed-pr"
+              echo "title_tag= PR"
+            } >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+
       - name: Generate token for central repo
         id: app-token
         uses: actions/create-github-app-token@v3
@@ -75,41 +117,52 @@ jobs:
           owner: ${{ steps.parse.outputs.owner }}
           repositories: ${{ steps.parse.outputs.name }}
 
-      - name: Relay issue
+      - name: Relay
         run: |
-          # Build the relay issue body with machine-readable metadata
+          # Build the relay issue body with machine-readable metadata.
+          # `source_issue` is kept as the key name even for PRs to preserve
+          # backwards-compat with existing central-repo workflows that grep
+          # for `source_repo:` / `source_url:` from this block. The `kind`
+          # field is the new disambiguator.
           BODY=$(cat <<'RELAY_EOF'
           <!-- relay-metadata
+          kind: PLACEHOLDER_KIND
           source_repo: PLACEHOLDER_REPO
           source_issue: PLACEHOLDER_NUMBER
           source_url: PLACEHOLDER_URL
           -->
 
-          _Relayed from PLACEHOLDER_REPO#PLACEHOLDER_NUMBER_
+          _Relayed from PLACEHOLDER_REPO PLACEHOLDER_KIND #PLACEHOLDER_NUMBER_
 
           ---
 
           RELAY_EOF
           )
+          BODY="${BODY//PLACEHOLDER_KIND/$KIND}"
           BODY="${BODY//PLACEHOLDER_REPO/$SOURCE_REPO}"
           BODY="${BODY//PLACEHOLDER_NUMBER/$SOURCE_NUMBER}"
           BODY="${BODY//PLACEHOLDER_URL/$SOURCE_URL}"
           BODY="${BODY}
 
-          ${ISSUE_BODY}"
+          ${SOURCE_BODY}"
 
-          # Create issue in central repo
+          # Always relay as an issue in the central repo — we don't fork
+          # branches into the central repo, and an issue is the right
+          # tracking object for both bug-investigations and fix-mirroring.
           gh issue create \
             --repo "$CENTRAL_REPO" \
-            --title "[$REPO_SHORT_NAME] ${ISSUE_TITLE}" \
-            --label relayed \
+            --title "[${REPO_SHORT_NAME}${TITLE_TAG}] ${SOURCE_TITLE}" \
+            --label "$LABEL" \
             --body "$BODY"
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           CENTRAL_REPO: ${{ inputs.central_repo }}
+          KIND: ${{ steps.payload.outputs.kind }}
+          LABEL: ${{ steps.payload.outputs.label }}
+          TITLE_TAG: ${{ steps.payload.outputs.title_tag }}
           SOURCE_REPO: ${{ github.repository }}
-          SOURCE_NUMBER: ${{ github.event.issue.number }}
-          SOURCE_URL: ${{ github.event.issue.html_url }}
+          SOURCE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+          SOURCE_URL: ${{ github.event.issue.html_url || github.event.pull_request.html_url }}
           REPO_SHORT_NAME: ${{ github.event.repository.name }}
-          ISSUE_TITLE: ${{ github.event.issue.title }}
-          ISSUE_BODY: ${{ github.event.issue.body }}
+          SOURCE_TITLE: ${{ github.event.issue.title || github.event.pull_request.title }}
+          SOURCE_BODY: ${{ github.event.issue.body || github.event.pull_request.body }}
