@@ -1,8 +1,9 @@
 name: Relay Issue for Cross-Repo Investigation
 
-# Called from language client repos to copy issues to the central repo.
+# Called from source repos (language clients, connectors, …) to copy issues
+# to a central cross-repo-investigation repo.
 #
-# Usage in a client repo (e.g. clickhouse-cs/.github/workflows/cross-repo-bug-relay.yml):
+# Usage in a source repo (e.g. clickhouse-cs/.github/workflows/cross-repo-bug-relay.yml):
 #
 #   name: Relay bugs for cross-repo investigation
 #   on:
@@ -10,11 +11,24 @@ name: Relay Issue for Cross-Repo Investigation
 #       types: [opened]
 #   jobs:
 #     relay:
-#       uses: ClickHouse/integrations-ai-playground/.github/workflows/cross-repo-bug-relay.yml@main
+#       uses: ClickHouse/integrations-shared-workflows/.github/workflows/cross-repo-bug-relay.yml@main
+#       # Optional: override the central repo. Defaults to the
+#       # integrations-ai-playground pipeline (language clients).
+#       # with:
+#       #   central_repo: ClickHouse/connectors-cross-repo-bug-checks
 #       secrets: inherit
 
 on:
   workflow_call:
+    inputs:
+      central_repo:
+        description: >-
+          Full `owner/name` of the cross-repo-investigation central repo to
+          relay issues into. Defaults to the original language-client
+          pipeline so existing callers keep working unchanged.
+        required: false
+        type: string
+        default: ClickHouse/integrations-ai-playground
     secrets:
       WORKFLOW_AUTH_PUBLIC_APP_ID:
         required: true
@@ -32,13 +46,34 @@ jobs:
       !endsWith(github.event.sender.login, '[bot]')
 
     steps:
+      - name: Parse central_repo
+        id: parse
+        # Split owner/name so we can pass them to create-github-app-token
+        # separately — its `owner` input lets the app scope the token to a
+        # repo in a different org than the source repo's, and `repositories`
+        # takes unqualified names. The full owner/name is used downstream
+        # by `gh issue create`.
+        run: |
+          set -euo pipefail
+          if [[ "$CENTRAL_REPO" != */* ]]; then
+            echo "::error::central_repo must be in 'owner/name' form, got '$CENTRAL_REPO'"
+            exit 1
+          fi
+          OWNER="${CENTRAL_REPO%%/*}"
+          NAME="${CENTRAL_REPO##*/}"
+          echo "owner=${OWNER}" >> "$GITHUB_OUTPUT"
+          echo "name=${NAME}"   >> "$GITHUB_OUTPUT"
+        env:
+          CENTRAL_REPO: ${{ inputs.central_repo }}
+
       - name: Generate token for central repo
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.WORKFLOW_AUTH_PUBLIC_APP_ID }}
           private-key: ${{ secrets.WORKFLOW_AUTH_PUBLIC_PRIVATE_KEY }}
-          repositories: integrations-ai-playground
+          owner: ${{ steps.parse.outputs.owner }}
+          repositories: ${{ steps.parse.outputs.name }}
 
       - name: Relay issue
         run: |
@@ -65,12 +100,13 @@ jobs:
 
           # Create issue in central repo
           gh issue create \
-            --repo ClickHouse/integrations-ai-playground \
+            --repo "$CENTRAL_REPO" \
             --title "[$REPO_SHORT_NAME] ${ISSUE_TITLE}" \
             --label relayed \
             --body "$BODY"
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          CENTRAL_REPO: ${{ inputs.central_repo }}
           SOURCE_REPO: ${{ github.repository }}
           SOURCE_NUMBER: ${{ github.event.issue.number }}
           SOURCE_URL: ${{ github.event.issue.html_url }}
