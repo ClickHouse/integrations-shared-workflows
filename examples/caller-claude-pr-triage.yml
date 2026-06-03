@@ -55,12 +55,13 @@ jobs:
         ## Risk rules
 
         ### High
+        - Behavioral change in public API.
         - Public API / serialization shape changed.
         - Auth, credential, or trust-boundary handling change.
         - Concurrency primitives added (locks, atomics), or changes to release CI.
 
         ### Medium
-        - Behavioral change in a core module.
+        - Behavioral change in an internal module.
         - New or changed default config value.
         - Large diff (~500+ LoC) without an obvious reason.
 
