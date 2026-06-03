@@ -218,6 +218,12 @@ jobs:
             in order: if any High rule fires → high; otherwise if any Medium rule
             fires → medium; otherwise low.
 
+            For a mixed-purpose PR (e.g. a new feature bundled with an unrelated
+            bugfix), assess each strand against the rules and take the highest risk
+            that any strand reaches. Select the most important one as the category. 
+            Note the bundling in Concerns, since it usually means the PR should be 
+            split or reviewed in parts.
+
             ## Repository-specific triage instructions
             These define the per-repo category meanings, the High/Medium/Low risk
             rules, and any reviewer-action policy. Apply them:
