@@ -41,7 +41,7 @@ you ever suspect compromise.
 
  * Add `ANTHROPIC_API_KEY` secret.
  * Add `triage:` and `risk:` labels.
- * Copy paste caller example and provide the the category and risk descriptions for your repo.
+ * Copy paste caller example and provide the category and risk descriptions for your repo.
 
 See [`examples/caller-claude-pr-triage.yml`](examples/caller-claude-pr-triage.yml)
 for a copy-paste caller.
