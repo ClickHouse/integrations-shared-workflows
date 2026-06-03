@@ -1,0 +1,77 @@
+# Example caller for the reusable Claude PR-triage workflow.
+#
+# Copy this to `.github/workflows/claude-pr-triage.yml` in a source repo and
+# replace `triage_instructions` with your own rubric (the categorize rules, the
+# high/medium/low risk rules, and the comment body — typically the body of your
+# `.claude/skills/triage-pr/SKILL.md`).
+#
+# Requirements in the caller repo:
+#   * Secret `ANTHROPIC_API_KEY`, reachable via `secrets: inherit`.
+#   * Labels using the `triage:*` and `risk:*` prefixes will be created/applied.
+
+name: Triage PR with Claude
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to triage"
+        required: true
+        type: string
+
+jobs:
+  triage:
+    uses: ClickHouse/integrations-shared-workflows/.github/workflows/claude-pr-triage.yml@main
+    with:
+      # pull_request runs read the PR from the event; only workflow_dispatch
+      # needs this forwarded (it's empty/ignored for pull_request).
+      pr_number: ${{ github.event.inputs.pr_number }}
+
+      # Optional tuning:
+      # categories: bugfix,feature,refactor,perf,deps,docs,tests,infra
+      # model: claude-opus-4-8
+      # max_turns: 15
+
+      # Your repository-specific rubric ONLY. The reusable workflow already
+      # supplies the triage method (two-pass summarize+categorize then risk),
+      # the Concerns guidance, the JSON schema, and the comment format — so do
+      # NOT repeat those here. Provide the category meanings, the High/Medium/Low
+      # risk rules, and (optionally) a reviewer-action policy. The block below is
+      # a minimal illustration — replace it with your real criteria.
+      triage_instructions: |
+        ## Category meanings
+
+        - `bugfix`   — fixes a defect; should have a regression test.
+        - `feature`  — new capability / API surface.
+        - `refactor` — internal restructuring, no behavior change.
+        - `perf`     — performance optimization.
+        - `deps`     — dependency bump.
+        - `docs`     — docs / comments only.
+        - `tests`    — test-only changes.
+        - `infra`    — CI, build, tooling.
+
+        ## Risk rules
+
+        ### High
+        - Behavioral change in public API.
+        - Public API / serialization shape changed.
+        - Auth, credential, or trust-boundary handling change.
+        - Concurrency primitives added (locks, atomics), or changes to release CI.
+
+        ### Medium
+        - Behavioral change in an internal module.
+        - New or changed default config value.
+        - Large diff (~500+ LoC) without an obvious reason.
+
+        ### Low (default)
+        - Doc/comment-only, isolated bugfix with a test, CI-only tweaks.
+
+        ## Reviewer-action policy
+
+        Emit one "Required reviewer action" line for the assigned risk:
+        - low    — AI review only; eligible for auto-merge per repo policy.
+        - medium — at least one human reviewer.
+        - high   — PR body must include an architectural description before review.
+    secrets: inherit
