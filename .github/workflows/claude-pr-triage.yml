@@ -18,8 +18,6 @@ name: Triage PR with Claude
 #   on:
 #     pull_request:
 #       types: [opened, synchronize, reopened]
-#       paths-ignore:
-#         - "**/*.md"
 #     workflow_dispatch:
 #       inputs:
 #         pr_number:
