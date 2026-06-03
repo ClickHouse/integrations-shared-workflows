@@ -37,11 +37,14 @@ where it's explicitly referenced — so `secrets: inherit` doesn't expose anythi
 else, and a per-job `environment` would add no isolation here. Rotate the key if
 you ever suspect compromise.
 
+**Quick Start:**
+
+ * Add `ANTHROPIC_API_KEY` secret.
+ * Add `triage:` and `risk:` labels.
+ * Copy paste caller example and provide the the category and risk descriptions for your repo.
+
 See [`examples/caller-claude-pr-triage.yml`](examples/caller-claude-pr-triage.yml)
 for a copy-paste caller.
-
-- Triage labels use the `triage:` and `risk:` prefixes.
-- The triage sticky comment is keyed by the marker `<!-- claude-triage-comment -->`.
 
 ### `cross-repo-bug-relay.yml` — Relay issues/PRs to a central repo
 
