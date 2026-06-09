@@ -46,6 +46,8 @@ you ever suspect compromise.
 See [`examples/caller-claude-pr-triage.yml`](examples/caller-claude-pr-triage.yml)
 for a copy-paste caller.
 
+See [here](https://github.com/ClickHouse/clickhouse-cs/blob/main/.github/workflows/claude-pr-triage.yml) for the live workflow in the .NET repo.
+
 ### `cross-repo-bug-relay.yml` — Relay issues/PRs to a central repo
 
 Called from source repos on `issues` / `pull_request` events to copy the item
