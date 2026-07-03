@@ -189,7 +189,7 @@ jobs:
           fi
           gh workflow run stresshouse-dispatch.yml "${args[@]}"
 
-      - name: Acknowledge on the PR
+      - name: Acknowledge on the PR (seed the sticky results comment)
         if: steps.p.outputs.mode != 'none'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -198,5 +198,23 @@ jobs:
           SHA: ${{ steps.p.outputs.sha }}
           MODE: ${{ steps.p.outputs.mode }}
         run: |
-          gh api "repos/${REPO}/issues/${PR}/comments" \
-            -f body="🚀 Benchmark run dispatched (\`${MODE}\`) for \`${SHA}\`. Results will be posted here when the run completes."
+          set -euo pipefail
+          # Seed the placeholder with the SAME mode-namespaced marker the
+          # renderer uses (see render_pr_comment.py `_marker`), so when results
+          # arrive the render workflow finds this comment by its marker and
+          # replaces it in place — the reader sees one comment go from
+          # "dispatched…" to the results. Upsert (not just create) so a re-run
+          # reuses the single sticky comment instead of duplicating it.
+          marker="<!-- clickhouse-benchmark-bot:${MODE} -->"
+          # printf (not a YAML multi-line string) so no block indentation leaks
+          # into the body and turns a line into a Markdown code block.
+          body=$(printf '%s\n\n🚀 Benchmark run dispatched (`%s`) for `%s`. Results will replace this comment when the run completes.' \
+            "$marker" "$MODE" "$SHA")
+
+          existing=$(M="$marker" gh api "repos/${REPO}/issues/${PR}/comments" \
+            --paginate --jq 'map(select(.body | contains(env.M))) | first | .id // empty')
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/${REPO}/issues/comments/${existing}" -f body="$body"
+          else
+            gh api "repos/${REPO}/issues/${PR}/comments" -f body="$body"
+          fi
