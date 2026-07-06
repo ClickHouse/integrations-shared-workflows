@@ -162,15 +162,27 @@ jobs:
             echo "config=$config"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Parse benchmarks_repo
+        id: bench
+        run: |
+          set -euo pipefail
+          if [[ "$BENCH_REPO" != */* ]]; then
+            echo "::error::benchmarks_repo must be in 'owner/name' form, got '$BENCH_REPO'" >&2
+            exit 1
+          fi
+          echo "owner=${BENCH_REPO%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${BENCH_REPO##*/}" >> "$GITHUB_OUTPUT"
+        env:
+          BENCH_REPO: ${{ inputs.benchmarks_repo }}
+
       - name: Mint token for the benchmarks repo
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.WORKFLOW_AUTH_PUBLIC_APP_ID }}
           private-key: ${{ secrets.WORKFLOW_AUTH_PUBLIC_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ inputs.benchmarks_repo }}
-
+          owner: ${{ steps.bench.outputs.owner }}
+          repositories: ${{ steps.bench.outputs.name }}
       - name: Trigger the StressHouse dispatch workflow
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
