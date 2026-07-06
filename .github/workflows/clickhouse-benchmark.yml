@@ -1,0 +1,232 @@
+name: ClickHouse client benchmark
+
+# Reusable workflow: trigger a StressHouse benchmark of a ClickHouse language
+# client, from the client's own repo, without any AWS/SQS access.
+#
+# It uses the shared public Workflow Auth app to start the `StressHouse
+# dispatch` workflow in ClickHouse/clickhouse-client-benchmarks (which owns the
+# SQS send). For PR profiles it also passes a callback so the run posts a sticky
+# results comment back onto the PR; the CIDB profiles are fire-and-forget.
+#
+# Callers register the real trigger (issue_comment / schedule / push /
+# workflow_dispatch) and pick a `profile`; everything else (which builds run,
+# no_publish, run_type, callback mode) is decided here so it can be changed in
+# one place. See the profile table below.
+#
+# | profile     | builds                         | no_publish | run_type       | callback   |
+# | ----------- | ------------------------------ | ---------- | -------------- | ---------- |
+# | pr-compare  | PR commit + baseline branch    | true       | pr-comparison  | pr-vs-main |
+# | pr-single   | PR commit                      | true       | manual         | plain      |
+# | baseline    | baseline branch (tip)          | false      | nightly        | none       |
+# | commit      | this commit (github.sha)       | false      | on-merge       | none       |
+#
+# Example caller (PR comparison on a `/benchmark-compare` comment):
+#
+#   name: Benchmark (PR vs main)
+#   on:
+#     issue_comment: { types: [created] }
+#     workflow_dispatch: { inputs: { pr_number: { required: true } } }
+#   jobs:
+#     benchmark:
+#       if: >-
+#         github.event_name == 'workflow_dispatch' ||
+#         (github.event.issue.pull_request &&
+#          startsWith(github.event.comment.body, '/benchmark-compare') &&
+#          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+#                   github.event.comment.author_association))
+#       uses: ClickHouse/integrations-shared-workflows/.github/workflows/clickhouse-benchmark.yml@main
+#       with:
+#         client: clickhouse-cs
+#         profile: pr-compare
+#       secrets: inherit
+#
+# More caller examples live in the benchmarks repo:
+# ClickHouse/clickhouse-client-benchmarks/docs/client-workflows/.
+
+on:
+  workflow_call:
+    inputs:
+      client:
+        description: >-
+          Client name as known to the benchmarks harness: ch-go,
+          clickhouse-client, clickhouse-connect, clickhouse-cs, clickhouse-go,
+          clickhouse-java, clickhouse-js, clickhouse-rs, or curl.
+        required: true
+        type: string
+      profile:
+        description: "pr-compare | pr-single | baseline | commit (see table)."
+        required: true
+        type: string
+      pr_number:
+        description: >-
+          PR to benchmark/comment on (pr-* profiles). Omit on issue_comment
+          callers (read from the event); forward your workflow_dispatch input
+          here for manual runs.
+        required: false
+        type: string
+        default: ""
+      baseline_ref:
+        description: "Baseline branch for pr-compare / baseline profiles."
+        required: false
+        type: string
+        default: main
+      benchmarks_repo:
+        description: "The harness repo that owns the dispatch workflow."
+        required: false
+        type: string
+        default: ClickHouse/clickhouse-client-benchmarks
+    secrets:
+      WORKFLOW_AUTH_PUBLIC_APP_ID:
+        required: true
+      WORKFLOW_AUTH_PUBLIC_PRIVATE_KEY:
+        required: true
+
+# contents: read to run; pull-requests: write to post the ack comment on PR
+# profiles. The cross-repo dispatch uses the minted app token, not GITHUB_TOKEN.
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  dispatch:
+    name: Dispatch StressHouse run
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve profile → run parameters
+        id: p
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROFILE: ${{ inputs.profile }}
+          CLIENT: ${{ inputs.client }}
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+          # PR number: explicit input wins, else the issue_comment event's issue.
+          PR_INPUT: ${{ inputs.pr_number }}
+          PR_EVENT: ${{ github.event.issue.number }}
+          PUSH_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # Resolve the PR head SHA for pr-* profiles.
+          pr="$PR_INPUT"; [ -z "$pr" ] && pr="$PR_EVENT"
+          sha=""
+          case "$PROFILE" in
+            pr-compare|pr-single)
+              if [ -z "$pr" ]; then
+                echo "::error::profile $PROFILE needs a PR (pr_number input or issue_comment event)" >&2
+                exit 1
+              fi
+              sha=$(gh api "repos/${REPO}/pulls/${pr}" --jq .head.sha)
+              ;;
+            commit)
+              sha="$PUSH_SHA"
+              ;;
+          esac
+
+          # Per-profile knobs + the plugin config.
+          case "$PROFILE" in
+            pr-compare)
+              mode=pr-vs-main
+              config=$(jq -nc --arg c "$CLIENT" --arg sha "$sha" --arg base "$BASELINE_REF" '{
+                benchmarks: [{client: $c, params: [
+                  {type: "commit", client_ref: $sha},
+                  {type: "branch", client_ref: $base}
+                ]}], no_publish: true, run_type: "pr-comparison"}') ;;
+            pr-single)
+              mode=plain
+              config=$(jq -nc --arg c "$CLIENT" --arg sha "$sha" '{
+                benchmarks: [{client: $c, params: [
+                  {type: "commit", client_ref: $sha}
+                ]}], no_publish: true, run_type: "manual"}') ;;
+            baseline)
+              mode=none
+              config=$(jq -nc --arg c "$CLIENT" --arg base "$BASELINE_REF" '{
+                benchmarks: [{client: $c, params: [
+                  {type: "branch", client_ref: $base}
+                ]}], no_publish: false, run_type: "nightly"}') ;;
+            commit)
+              mode=none
+              config=$(jq -nc --arg c "$CLIENT" --arg sha "$sha" '{
+                benchmarks: [{client: $c, params: [
+                  {type: "commit", client_ref: $sha}
+                ]}], no_publish: false, run_type: "on-merge"}') ;;
+            *)
+              echo "::error::unknown profile '$PROFILE' (want pr-compare|pr-single|baseline|commit)" >&2
+              exit 1 ;;
+          esac
+
+          {
+            echo "mode=$mode"
+            echo "pr=$pr"
+            echo "sha=$sha"
+            echo "config=$config"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Parse benchmarks_repo
+        id: bench
+        run: |
+          set -euo pipefail
+          if [[ "$BENCH_REPO" != */* ]]; then
+            echo "::error::benchmarks_repo must be in 'owner/name' form, got '$BENCH_REPO'" >&2
+            exit 1
+          fi
+          echo "owner=${BENCH_REPO%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${BENCH_REPO##*/}" >> "$GITHUB_OUTPUT"
+        env:
+          BENCH_REPO: ${{ inputs.benchmarks_repo }}
+
+      - name: Mint token for the benchmarks repo
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.WORKFLOW_AUTH_PUBLIC_APP_ID }}
+          private-key: ${{ secrets.WORKFLOW_AUTH_PUBLIC_PRIVATE_KEY }}
+          owner: ${{ steps.bench.outputs.owner }}
+          repositories: ${{ steps.bench.outputs.name }}
+      - name: Trigger the StressHouse dispatch workflow
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          MODE: ${{ steps.p.outputs.mode }}
+          CONFIG: ${{ steps.p.outputs.config }}
+          REPO: ${{ github.repository }}
+          PR: ${{ steps.p.outputs.pr }}
+          SHA: ${{ steps.p.outputs.sha }}
+          BENCH_REPO: ${{ inputs.benchmarks_repo }}
+        run: |
+          set -euo pipefail
+          args=(--repo "$BENCH_REPO" --ref main -f config="$CONFIG")
+          if [ "$MODE" != "none" ]; then
+            args+=(-f callback_repo="$REPO" -f callback_pr="$PR" \
+                   -f callback_sha="$SHA" -f callback_mode="$MODE")
+          fi
+          gh workflow run stresshouse-dispatch.yml "${args[@]}"
+
+      - name: Acknowledge on the PR (seed the sticky results comment)
+        if: steps.p.outputs.mode != 'none'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ steps.p.outputs.pr }}
+          SHA: ${{ steps.p.outputs.sha }}
+          MODE: ${{ steps.p.outputs.mode }}
+        run: |
+          set -euo pipefail
+          # Seed the placeholder with the SAME mode-namespaced marker the
+          # renderer uses (see render_pr_comment.py `_marker`), so when results
+          # arrive the render workflow finds this comment by its marker and
+          # replaces it in place — the reader sees one comment go from
+          # "dispatched…" to the results. Upsert (not just create) so a re-run
+          # reuses the single sticky comment instead of duplicating it.
+          marker="<!-- clickhouse-benchmark-bot:${MODE} -->"
+          # printf (not a YAML multi-line string) so no block indentation leaks
+          # into the body and turns a line into a Markdown code block.
+          body=$(printf '%s\n\n🚀 Benchmark run dispatched (`%s`) for `%s`. Results will replace this comment when the run completes.' \
+            "$marker" "$MODE" "$SHA")
+
+          existing=$(M="$marker" gh api "repos/${REPO}/issues/${PR}/comments" \
+            --paginate --jq 'map(select(.body | contains(env.M))) | first | .id // empty')
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/${REPO}/issues/comments/${existing}" -f body="$body"
+          else
+            gh api "repos/${REPO}/issues/${PR}/comments" -f body="$body"
+          fi
