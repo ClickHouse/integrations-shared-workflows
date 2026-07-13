@@ -15,8 +15,8 @@ name: ClickHouse client benchmark
 #
 # | profile     | builds                         | no_publish | run_type       | callback   |
 # | ----------- | ------------------------------ | ---------- | -------------- | ---------- |
-# | pr-compare  | PR commit + baseline branch    | true       | pr-comparison  | pr-vs-main |
-# | pr-single   | PR commit                      | true       | manual         | plain      |
+# | pr-compare  | PR commit + baseline branch    | false       | pr-comparison  | pr-vs-main |
+# | pr-single   | PR commit                      | false       | manual         | plain      |
 # | baseline    | baseline branch (tip)          | false      | nightly        | none       |
 # | commit      | this commit (github.sha)       | false      | on-merge       | none       |
 #
@@ -131,13 +131,13 @@ jobs:
                 benchmarks: [{client: $c, params: [
                   {type: "commit", client_ref: $sha},
                   {type: "branch", client_ref: $base}
-                ]}], no_publish: true, run_type: "pr-comparison"}') ;;
+                ]}], no_publish: false, run_type: "pr-comparison"}') ;;
             pr-single)
               mode=plain
               config=$(jq -nc --arg c "$CLIENT" --arg sha "$sha" '{
                 benchmarks: [{client: $c, params: [
                   {type: "commit", client_ref: $sha}
-                ]}], no_publish: true, run_type: "manual"}') ;;
+                ]}], no_publish: false, run_type: "manual"}') ;;
             baseline)
               mode=none
               config=$(jq -nc --arg c "$CLIENT" --arg base "$BASELINE_REF" '{
