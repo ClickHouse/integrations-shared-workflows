@@ -20,6 +20,11 @@ name: ClickHouse client benchmark
 # | baseline    | baseline branch (tip)          | false      | nightly        | none       |
 # | commit      | this commit (github.sha)       | false      | on-merge       | none       |
 #
+# All profiles run the hits payload benchmarks plus the overhead-bound family
+# (SelectSerial / SelectConcurrent / SelectNewClient / InsertConcurrent), set via
+# the plugin's BENCHMARKS env passthrough. OP_COUNT / CONCURRENCY stay at the
+# harness defaults.
+#
 # Example caller (PR comparison on a `/benchmark-compare` comment):
 #
 #   name: Benchmark (PR vs main)
@@ -123,33 +128,41 @@ jobs:
               ;;
           esac
 
+          # Every profile runs the hits payload set plus the overhead-bound
+          # family (SelectSerial / SelectConcurrent / SelectNewClient /
+          # InsertConcurrent), passed to the harness via the plugin's env
+          # passthrough (BENCHMARKS -> 002_run_one.sh). Mirrors the default of
+          # the run-client-benchmarks/action.yml composite action. OP_COUNT /
+          # CONCURRENCY are left at the harness defaults (not exposed here).
+          benchmarks="SelectHitsCount,SelectHits,InsertHits,SelectSerial,SelectConcurrent,SelectNewClient,InsertConcurrent"
+
           # Per-profile knobs + the plugin config.
           case "$PROFILE" in
             pr-compare)
               mode=pr-vs-main
-              config=$(jq -nc --arg c "$CLIENT" --arg sha "$sha" --arg base "$BASELINE_REF" '{
+              config=$(jq -nc --arg c "$CLIENT" --arg sha "$sha" --arg base "$BASELINE_REF" --arg b "$benchmarks" '{
                 benchmarks: [{client: $c, params: [
                   {type: "commit", client_ref: $sha},
                   {type: "branch", client_ref: $base}
-                ]}], no_publish: false, run_type: "pr-comparison"}') ;;
+                ]}], no_publish: false, run_type: "pr-comparison", env: {BENCHMARKS: $b}}') ;;
             pr-single)
               mode=plain
-              config=$(jq -nc --arg c "$CLIENT" --arg sha "$sha" '{
+              config=$(jq -nc --arg c "$CLIENT" --arg sha "$sha" --arg b "$benchmarks" '{
                 benchmarks: [{client: $c, params: [
                   {type: "commit", client_ref: $sha}
-                ]}], no_publish: false, run_type: "manual"}') ;;
+                ]}], no_publish: false, run_type: "manual", env: {BENCHMARKS: $b}}') ;;
             baseline)
               mode=none
-              config=$(jq -nc --arg c "$CLIENT" --arg base "$BASELINE_REF" '{
+              config=$(jq -nc --arg c "$CLIENT" --arg base "$BASELINE_REF" --arg b "$benchmarks" '{
                 benchmarks: [{client: $c, params: [
                   {type: "branch", client_ref: $base}
-                ]}], no_publish: false, run_type: "nightly"}') ;;
+                ]}], no_publish: false, run_type: "nightly", env: {BENCHMARKS: $b}}') ;;
             commit)
               mode=none
-              config=$(jq -nc --arg c "$CLIENT" --arg sha "$sha" '{
+              config=$(jq -nc --arg c "$CLIENT" --arg sha "$sha" --arg b "$benchmarks" '{
                 benchmarks: [{client: $c, params: [
                   {type: "commit", client_ref: $sha}
-                ]}], no_publish: false, run_type: "on-merge"}') ;;
+                ]}], no_publish: false, run_type: "on-merge", env: {BENCHMARKS: $b}}') ;;
             *)
               echo "::error::unknown profile '$PROFILE' (want pr-compare|pr-single|baseline|commit)" >&2
               exit 1 ;;
