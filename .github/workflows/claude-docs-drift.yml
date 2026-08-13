@@ -4,8 +4,8 @@ name: Docs drift check with Claude
 # Claude compares the PR's code changes against the repo's documentation and
 # reports whether a user-visible change is missing a matching docs update. The
 # workflow then applies or removes a `needs-docs` label and upserts a single
-# sticky comment. It is advisory: the check itself always passes unless the
-# caller opts into `fail_on_drift`.
+# sticky comment. It is advisory only: the job never fails, so it can never
+# block a PR. Errors inside the check surface as failed steps in a green job.
 #
 # The judgement criteria are NOT baked in here — each repo checks in its own
 # rubric as a Claude agent file (default `.claude/agents/docs-drift-reviewer.md`)
@@ -59,6 +59,11 @@ name: Docs drift check with Claude
 #     the checkout is the default branch, not the PR head, so the rubric and doc
 #     files Claude reads are the trusted base versions and the PR's own content
 #     arrives only through `gh pr diff`.
+#   * Failure semantics: every step is fail-open (`continue-on-error`). If the
+#     Claude step or the posting step errors (e.g. an API outage), the step is
+#     marked failed, nothing is posted, and the job stays green. The deliberate
+#     cost: a misconfigured ANTHROPIC_API_KEY shows up only as a failed step
+#     inside a green job, never as a red check on the PR.
 
 on:
   workflow_call:
@@ -71,17 +76,12 @@ on:
         type: string
         default: .claude/agents/docs-drift-reviewer.md
       label:
-        description: Label applied while the PR has unresolved docs drift.
+        description: >-
+          Label applied while the PR has unresolved docs drift. Empty string
+          disables labeling entirely; the check is then comment-only.
         required: false
         type: string
         default: needs-docs
-      fail_on_drift:
-        description: >-
-          If true, the job fails when drift is found, so the check can be made
-          required in branch protection. Default false: comment-and-label only.
-        required: false
-        type: boolean
-        default: false
       model:
         description: >-
           Optional Claude model override (e.g. `claude-opus-4-8`). Empty uses
@@ -127,12 +127,18 @@ jobs:
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v6
+        # Fail open: without a checkout the rubric gate sees no file and the
+        # run becomes a green no-op.
+        continue-on-error: true
         with:
           fetch-depth: 1
           persist-credentials: false
 
       - name: Resolve target PR and rubric
         id: prep
+        # Fail open: if this errors, `enabled` stays unset and every later step
+        # skips, leaving the job green.
+        continue-on-error: true
         env:
           AGENT_PATH: ${{ inputs.agent_path }}
           INPUT_PR: ${{ inputs.pr_number }}
@@ -162,6 +168,11 @@ jobs:
       - name: Check docs drift
         id: check
         if: steps.prep.outputs.enabled == 'true'
+        # Fail open: a Claude step error (e.g. API outage) must never fail the job.
+        # The step timeout trips before the job-level one so a hung run ends as a
+        # failed step inside a green job, not a failed job.
+        continue-on-error: true
+        timeout-minutes: 12
         uses: anthropics/claude-code-action@fefa07e9c665b7320f08c3b525980457f22f58aa  # v1.0.111
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -178,7 +189,7 @@ jobs:
             --disallowedTools "WebFetch,WebSearch,Edit,Write,MultiEdit,NotebookEdit"
             --max-turns ${{ inputs.max_turns }}
             ${{ inputs.model != '' && format('--model {0}', inputs.model) || '' }}
-            --json-schema '{"type":"object","required":["drift","body"],"additionalProperties":false,"properties":{"drift":{"type":"boolean"},"body":{"type":"string","minLength":40}}}'
+            --json-schema '{"type":"object","required":["drift","body"],"additionalProperties":false,"properties":{"drift":{"type":"boolean"},"body":{"type":"string","minLength":10,"maxLength":2000}}}'
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ steps.prep.outputs.pr }}
@@ -240,33 +251,35 @@ jobs:
               { "drift": <true if at least one confident missing doc update>,
                 "body": <the comment markdown, see below> }
 
-            `body` must be in the following structure. Omit any sections that
-            would be empty. Keep every bullet to one line tying a specific code
-            change to a specific doc location.
+            `body` is a PR comment and must be as short as possible. One bullet
+            per doc file that needs updating. Each bullet is one plain factual
+            sentence: which file, what to add or fix. No preamble, no praise, no
+            hedging, no explanations of your reasoning, no summary of the PR,
+            nothing about changes that are fine.
+
+            When drift is true:
 
             ```markdown
-            ## Docs drift check
+            **Docs drift check:** this PR looks like it needs doc updates.
 
-            **Status:** needs docs update | docs in sync
+            - `<doc file>`: <what to add or fix>
+            ```
 
-            **Missing documentation**
-            - <user-visible change> -> `<doc file>` <section>: <what to add or fix>
+            When drift is false (used only to mark an earlier comment resolved):
 
-            **Already covered**
-            - <user-visible change whose doc update is already in this PR>
-
-            **Notes**
-            - <ambiguity you chose not to flag, or other observations from the rubric>
+            ```markdown
+            **Docs drift check:** resolved, docs now match this PR's changes.
             ```
 
       - name: Reconcile label and sticky comment
         if: steps.check.outputs.structured_output != ''
+        # Fail open: a GitHub API error while posting must never fail the job.
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ steps.prep.outputs.pr }}
           LABEL: ${{ inputs.label }}
-          FAIL_ON_DRIFT: ${{ inputs.fail_on_drift }}
           OUTPUT: ${{ steps.check.outputs.structured_output }}
         run: |
           set -euo pipefail
@@ -287,19 +300,27 @@ jobs:
           BODY="${BODY#$'\n'}"
           BODY="${MARKER}"$'\n'"${BODY}"
 
-          HAS_LABEL=$(gh pr view "$PR" --json labels \
-            --jq --arg l "$LABEL" '[.labels[].name] | index($l) != null')
+          # gh's --jq takes only the expression (no --arg support); gh embeds
+          # gojq, which reads the step environment through env.LABEL instead.
+          # An empty label input disables labeling; the check is comment-only.
+          HAS_LABEL=false
+          if [[ -n "$LABEL" ]]; then
+            HAS_LABEL=$(gh pr view "$PR" --json labels \
+              --jq '[.labels[].name] | index(env.LABEL) != null')
+          fi
           URL=$(gh pr view "$PR" --json comments \
             --jq "[.comments[] | select(.body | startswith(\"$MARKER\")) | .url][0] // empty")
 
           if [[ "$DRIFT" == "true" ]]; then
-            # Make sure the label exists repo-side, then apply it if missing.
-            REPO_LABELS=$(gh label list --limit 500 --json name --jq '.[].name')
-            if ! grep -qxF "$LABEL" <<<"$REPO_LABELS"; then
-              gh label create "$LABEL" --color D93F0B \
-                --description "PR has user-visible changes without matching docs updates"
+            if [[ -n "$LABEL" ]]; then
+              # Make sure the label exists repo-side, then apply it if missing.
+              REPO_LABELS=$(gh label list --limit 500 --json name --jq '.[].name')
+              if ! grep -qxF "$LABEL" <<<"$REPO_LABELS"; then
+                gh label create "$LABEL" --color D93F0B \
+                  --description "PR has user-visible changes without matching docs updates"
+              fi
+              [[ "$HAS_LABEL" != "true" ]] && gh pr edit "$PR" --add-label "$LABEL"
             fi
-            [[ "$HAS_LABEL" != "true" ]] && gh pr edit "$PR" --add-label "$LABEL"
 
             # Upsert the sticky comment with the current findings.
             if [[ -n "$URL" ]]; then
@@ -319,9 +340,4 @@ jobs:
             else
               echo "Docs in sync; nothing to post."
             fi
-          fi
-
-          if [[ "$FAIL_ON_DRIFT" == "true" && "$DRIFT" == "true" ]]; then
-            echo "::error::docs drift found and fail_on_drift is enabled"
-            exit 1
           fi
