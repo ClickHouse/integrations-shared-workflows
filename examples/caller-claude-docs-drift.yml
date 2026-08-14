@@ -1,0 +1,25 @@
+name: Docs Drift Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to check"
+        required: true
+        type: string
+
+permissions:
+  pull-requests: read
+
+jobs:
+  docs-drift:
+    uses: ClickHouse/integrations-shared-workflows/.github/workflows/claude-docs-drift.yml@main
+    with:
+      # Pull request runs read the PR from the event. Manual runs forward the
+      # workflow_dispatch input.
+      pr_number: ${{ github.event.inputs.pr_number }}
+    secrets:
+      WORKFLOW_AUTH_PUBLIC_APP_ID: ${{ secrets.WORKFLOW_AUTH_PUBLIC_APP_ID }}
+      WORKFLOW_AUTH_PUBLIC_PRIVATE_KEY: ${{ secrets.WORKFLOW_AUTH_PUBLIC_PRIVATE_KEY }}

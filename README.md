@@ -6,7 +6,40 @@ so the logic lives in one place and per-repo specifics are passed as inputs.
 
 ## Workflows
 
-### `claude-pr-triage.yml` — Triage PRs with Claude
+### `claude-docs-drift.yml` - Dispatch centralized docs drift checks
+
+Sends a source pull request to the central docs-drift worker in
+`ClickHouse/integrations-ai-playground`. The shared workflow is a thin relay. It
+uses the Workflow Authentication GitHub App to validate the source PR and send
+a `repository_dispatch` event containing the source repo, PR number, expected
+head SHA, and rubric options. It does not run Claude or receive a model
+credential.
+
+The central worker reads the source repo's rubric from the trusted base
+revision, reviews the PR diff, and reconciles the `needs-docs` label and sticky
+comment back on the source PR. It checks the expected head SHA before and after
+the model run so stale results cannot overwrite a newer push.
+
+| Input | Required | Default | Purpose |
+|---|---|---|---|
+| `agent_path` | no | `.claude/agents/docs-drift-reviewer.md` | Source repo rubric path. A missing rubric makes the central check a no-op. |
+| `label` | no | `needs-docs` | Drift label. Empty makes the check comment-only. |
+| `model` | no | central default | Optional Claude model override. |
+| `max_turns` | no | `30` | Maximum turns in the central worker. |
+| `pr_number` | no | from event | Required only for `workflow_dispatch` callers. |
+| `central_repo` | no | `ClickHouse/integrations-ai-playground` | Repository that receives the dispatch. |
+
+Required secrets are `WORKFLOW_AUTH_PUBLIC_APP_ID` and
+`WORKFLOW_AUTH_PUBLIC_PRIVATE_KEY`. These are the same GitHub App credentials
+used by `cross-repo-bug-relay.yml`. The caller grants its `GITHUB_TOKEN` only
+`pull-requests: read`; the App token is scoped to the central repository for
+dispatch. Source repos do not need an Anthropic key.
+
+See [`examples/caller-claude-docs-drift.yml`](examples/caller-claude-docs-drift.yml)
+for a copy-paste caller. Add repository-specific `paths` filters when only part
+of a repository can contain user-visible changes.
+
+### `claude-pr-triage.yml` - Triage PRs with Claude
 
 Classifies each PR (category + low/medium/high risk) against a rubric the caller
 supplies, then applies `triage:*` / `risk:*` labels and upserts a single sticky
@@ -48,7 +81,7 @@ for a copy-paste caller.
 
 See [here](https://github.com/ClickHouse/clickhouse-cs/blob/main/.github/workflows/claude-pr-triage.yml) for the live workflow in the .NET repo.
 
-### `cross-repo-bug-relay.yml` — Relay issues/PRs to a central repo
+### `cross-repo-bug-relay.yml` - Relay issues/PRs to a central repo
 
 Called from source repos on `issues` / `pull_request` events to copy the item
 into a central cross-repo-investigation repo (issues labelled `relayed`, PRs
