@@ -6,7 +6,7 @@
 # `.claude/skills/triage-pr/SKILL.md`).
 #
 # Requirements in the caller repo:
-#   * Secret `ANTHROPIC_API_KEY`, reachable via `secrets: inherit`.
+#   * Secret `ANTHROPIC_API_KEY`, passed through explicitly (see the bottom).
 #   * Labels using the `triage:*` and `risk:*` prefixes will be created/applied.
 
 name: Triage PR with Claude
@@ -23,6 +23,15 @@ on:
 
 jobs:
   triage:
+    # Required, not optional. A called workflow can only narrow the permissions
+    # its caller grants, never widen them — so if you leave this out, the job
+    # runs on your repo's default token and triage fails to apply labels or post
+    # its comment whenever that default is read-only. These three are exactly
+    # what claude-pr-triage.yml declares; do not add to them.
+    permissions:
+      contents: read
+      pull-requests: write   # labels + the sticky results comment
+      issues: read           # lets Claude read an issue the PR links to
     uses: ClickHouse/integrations-shared-workflows/.github/workflows/claude-pr-triage.yml@main
     with:
       # pull_request runs read the PR from the event; only workflow_dispatch
@@ -74,4 +83,8 @@ jobs:
         - low    — AI review only; eligible for auto-merge per repo policy.
         - medium — at least one human reviewer.
         - high   — PR body must include an architectural description before review.
-    secrets: inherit
+    # Passed explicitly rather than with `secrets: inherit`. This is the only
+    # secret the reusable workflow declares, so naming it keeps the rest of this
+    # repo's secret store out of reach of a workflow in another repository.
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

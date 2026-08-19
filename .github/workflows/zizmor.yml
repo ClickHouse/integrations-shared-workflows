@@ -1,0 +1,75 @@
+name: zizmor
+
+# Static analysis of this repo's GitHub Actions definitions.
+#
+# Everything here is a reusable workflow that other repos call, so a mistake in
+# one of these files becomes a mistake in every caller. These workflows also run
+# an AI agent over untrusted PR content with an app token, which puts them in the
+# trust boundary rather than in build glue. zizmor catches the classes that
+# matter: expression interpolation into `run:` blocks, over-broad app tokens and
+# `permissions:` grants, and unreviewed action refs.
+#
+# The gate fails on ANY finding zizmor reports. Accepted risks are listed in
+# .github/zizmor.yml with a reason, so an exception is a reviewable diff rather
+# than a warning nobody reads. If this job fails, either fix the workflow or add
+# the exception there.
+
+on:
+  # Deliberately unfiltered on pull requests, unlike the push trigger below. A
+  # run that `paths` skips reports no status at all, so this job could never be a
+  # required check: every pull request that left the workflows alone would wait
+  # for a status that never arrives. The audit takes about ten seconds, so it is
+  # cheaper to run it every time than to keep a filter and a skip shim in sync.
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+      - ".github/actions/**"
+      - ".github/zizmor.yml"
+      # zizmor audits the Dependabot config too (cooldown windows, ecosystems),
+      # so a change to it has to re-run the gate.
+      - ".github/dependabot.yml"
+      - "examples/**"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  zizmor:
+    name: Audit Actions setup
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Run zizmor
+        # `pipx` is preinstalled on the GitHub-hosted Ubuntu images, so there is
+        # no setup action to trust here.
+        #
+        # The version is pinned: with a fail-on-anything gate, an unpinned
+        # zizmor would let a new release add audits that break unrelated PRs.
+        # Bump it deliberately, and fix or record whatever the new version finds
+        # in the same PR.
+        #
+        # The examples are matched as files, not as a directory: zizmor collects
+        # directories by convention and only looks in `.github`. They are audited
+        # because client repos copy them, so a permissions or interpolation
+        # mistake there propagates. The glob keeps new examples covered without
+        # anyone remembering to add them.
+        #
+        # Default `regular` persona. `--persona=pedantic` also reports style
+        # findings (missing concurrency limits, uncommented `permissions:`) that
+        # are not security properties and would make the gate noisy.
+        #
+        # GH_TOKEN enables the online audits, which check action refs against
+        # GitHub advisories and confirm the refs still exist. Those need the API,
+        # and they are the reason a workflow-touching PR can start failing for a
+        # newly published advisory — that is the intent.
+        run: pipx run zizmor==1.29.0 --no-progress .github/ examples/*.yml
+        env:
+          GH_TOKEN: ${{ github.token }}

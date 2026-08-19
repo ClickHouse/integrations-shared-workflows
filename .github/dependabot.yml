@@ -1,0 +1,23 @@
+# Keeps the hash-pinned action refs current. Every `uses:` in this repo is pinned
+# to a commit (see .github/zizmor.yml), which is only maintainable if something
+# proposes the bumps — that is this file's whole job. Without it the pins rot.
+version: 2
+updates:
+  # For the github-actions ecosystem, `/` means ".github/workflows" plus an
+  # action.yml in the repo root — it is not a normal directory path. This repo has
+  # no composite actions, so one entry covers it. `examples/` is not scanned, but
+  # the only ref in there is a reusable workflow at `@main`, which is deliberately
+  # unpinned (see .github/zizmor.yml).
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    # Wait a week before proposing a release. Auto-bumping a commit hash means
+    # trusting whatever was published; most compromised or yanked releases are
+    # found within days, so the delay costs nothing and skips that window.
+    cooldown:
+      default-days: 7
+    groups:
+      # One PR for all action bumps rather than one per action.
+      actions:
+        patterns: ["*"]
