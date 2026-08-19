@@ -1,0 +1,24 @@
+# zizmor configuration — https://docs.zizmor.sh/configuration/
+#
+# The CI gate (.github/workflows/zizmor.yml) fails on ANY finding zizmor still
+# reports. So this file is the complete list of accepted risks in this repo's
+# Actions setup, and each entry must say why. Fix the workflow first; add an
+# entry here only when the finding is wrong or the risk is understood and taken.
+#
+# There is no `unpinned-uses` policy block on purpose: zizmor's default blanket
+# policy already requires a full commit hash, and every `uses:` in this repo is
+# pinned that way. .github/dependabot.yml proposes the bumps weekly so the pins
+# stay current — the two files are a pair, and dropping either one leaves you
+# with refs that are stale or unpinned.
+
+rules:
+  unpinned-uses:
+    ignore:
+      # Callers are told to reference these reusable workflows at `@main` — that
+      # is the point of publishing them here, and pinning callers to a commit
+      # would mean every client repo needs a bump for every fix. The example
+      # callers are audited anyway so that a `run:` block or permissions mistake
+      # in one cannot be copied into seven repos unnoticed. Add a line here when
+      # you add an example caller.
+      - caller-claude-pr-triage.yml
+      - caller-claude-docs-drift.yml

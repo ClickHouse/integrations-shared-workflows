@@ -34,7 +34,8 @@ name: Triage PR with Claude
 #         triage_instructions: |
 #           <your repo's category meanings + high/medium/low risk rules, and
 #           optionally a reviewer-action policy — see the example caller>
-#       secrets: inherit
+#       secrets:
+#         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 #
 # Notes:
 #   * `triage_instructions` is the per-repo rubric: what each category means for
@@ -48,8 +49,8 @@ name: Triage PR with Claude
 #     `gh label list`. It can't write files or post comments, and the workflow
 #     never runs the PR's code (checkout only). Only two secrets are ever
 #     referenced — ANTHROPIC_API_KEY and the permissions-scoped GITHUB_TOKEN —
-#     and GitHub injects a secret into a step only where it's explicitly used, so
-#     `secrets: inherit` doesn't widen the blast radius.
+#     and callers pass the first one explicitly (see the usage block above), so
+#     nothing else in the caller's secret store is reachable from here.
 #   * Fork PRs are skipped (they don't get secrets). Maintainers can still run a
 #     fork PR through `workflow_dispatch` after a sanity look.
 
@@ -117,7 +118,7 @@ jobs:
       group: claude-triage-${{ github.repository }}-${{ inputs.pr_number != '' && inputs.pr_number || github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -160,7 +161,7 @@ jobs:
 
       - name: Triage PR
         id: triage
-        uses: anthropics/claude-code-action@fefa07e9c665b7320f08c3b525980457f22f58aa  # v1.0.111
+        uses: anthropics/claude-code-action@d40ddef4c030e508327d6e35a9c45f3368482c50 # v1.0.195
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           # Use the runner-injected GITHUB_TOKEN instead of letting the action mint

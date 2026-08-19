@@ -110,12 +110,15 @@ jobs:
 
       - name: Generate token for central repo
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.WORKFLOW_AUTH_PUBLIC_APP_ID }}
           private-key: ${{ secrets.WORKFLOW_AUTH_PUBLIC_PRIVATE_KEY }}
           owner: ${{ steps.parse.outputs.owner }}
           repositories: ${{ steps.parse.outputs.name }}
+          # Without this the token carries every permission the app holds on the
+          # central repo. The only call it makes is one `gh issue create`.
+          permission-issues: write
 
       - name: Relay
         run: |

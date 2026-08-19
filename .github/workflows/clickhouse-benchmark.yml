@@ -190,12 +190,18 @@ jobs:
 
       - name: Mint token for the benchmarks repo
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.WORKFLOW_AUTH_PUBLIC_APP_ID }}
           private-key: ${{ secrets.WORKFLOW_AUTH_PUBLIC_PRIVATE_KEY }}
           owner: ${{ steps.bench.outputs.owner }}
           repositories: ${{ steps.bench.outputs.name }}
+          # Without these the token carries every permission the app holds on the
+          # benchmarks repo. All it does is dispatch one workflow there:
+          # `actions: write` to dispatch, `contents: read` to resolve the ref.
+          permission-actions: write
+          permission-contents: read
+
       - name: Trigger the StressHouse dispatch workflow
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
